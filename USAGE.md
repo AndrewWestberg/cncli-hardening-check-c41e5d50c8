@@ -1,0 +1,705 @@
+# CNCLI Usage
+
+## Command outcomes
+
+Successful commands exit 0. Operational/configuration/validation failures exit 1 and emit one JSON object with `"status": "error"` and `"errorMessage"`; ping also preserves host/port. Results (JSON, nonce, block hex or CSV as applicable) use stdout and tracing logs use stderr. If writing stdout fails, including a closed pipe, CNCLI diagnoses on stderr and exits 1 without attempting a second JSON document.
+
+A found historical orphan is a valid lookup: validate emits `"status": "orphaned"` and exits 0. A missing block fails. Successful sendslots, snapshot and sync retain their existing output behavior; no invented success JSON envelope is emitted. Consumers must check exit status before parsing results.
+
+`sync --no-service` returns its first failure and succeeds only when it reaches and commits the advertised tip (including an already-at-tip intersection). Service sync retries transport failures, not storage/configuration/integrity errors.
+
+Sendtip reports the latest observed tip best-effort. While HTTP is in flight, newer updates replace older pending updates; rollback/disconnect clears stale state. An already-sent HTTP request cannot be retracted. HTTP failures wait for the next header, without an outbox or obsolete-tip retries.
+
+SQLite is the concurrent sync + leaderlog deployment default. Redb supports serialized/offline operations; stop sync and use a backend-consistent disposable copy when scheduling redb leaderlog. Never force-unlock or copy a live redb file.
+
+## Commands & Examples
+
+### Ping Command
+
+This command validates that the remote server is on the given network and returns its response time. `--timeout-seconds` is one deadline covering DNS lookup, TCP connection and handshake, not a separate allowance for each stage. No addresses, rejection, a query reply or a silent peer fails with exit 1.
+
+#### Show Ping Help
+
+```bash
+$ cncli ping --help
+cncli-ping 6.0.0
+
+USAGE:
+    cncli ping [OPTIONS] --host <host>
+
+FLAGS:
+        --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+    -h, --host <host>                          cardano-node hostname to connect to
+        --network-magic <network-magic>        network magic. [default: 764824073]
+    -p, --port <port>                          cardano-node port [default: 3001]
+    -t, --timeout-seconds <timeout-seconds>    whole DNS/connect/handshake deadline in seconds [default: 2]
+```
+
+#### Example Mainnet ping using defaults
+
+```bash
+$ cncli ping --host backbone.cardano-mainnet.iohk.io
+```
+
+##### Ping Success Result
+
+```bash
+{
+  "status": "ok",
+  "host": "backbone.cardano-mainnet.iohk.io",
+  "port": 3001,
+  "networkProtocolVersion": 11,
+  "dnsDurationMs": 33,
+  "connectDurationMs": 131,
+  "handshakeDurationMs": 130,
+  "durationMs": 296
+}
+```
+
+#### Example Mainnet ping timeout failure
+
+```bash
+$ cncli ping --host backbone.cardano-mainnet.iohk.io --port 9999
+```
+
+##### Ping Failure Result
+
+```bash
+{
+  "status": "error",
+  "host": "backbone.cardano-mainnet.iohk.io",
+  "port": 9999,
+  "errorMessage": "connect timeout"
+}
+```
+
+#### Example ping to testnet node with mainnet magic failure
+
+```bash
+$ cncli ping --host preprod-node.play.dev.cardano.org
+```
+
+##### Ping Magic Failure Result
+
+```bash
+{
+  "status": "error",
+  "host": "preprod-node.play.dev.cardano.org",
+  "port": 3001,
+  "errorMessage": "Refused(11, \"version data mismatch: NodeToNodeVersionData {networkMagic = NetworkMagic {unNetworkMagic = 1}, diffusionMode = InitiatorAndResponderDiffusionMode, peerSharing = PeerSharingDisabled, query = False} /= NodeToNodeVersionData {networkMagic = NetworkMagic {unNetworkMagic = 764824073}, diffusionMode = InitiatorAndResponderDiffusionMode, peerSharing = PeerSharingDisabled, query = False}\")"
+}
+```
+
+#### Example ping to testnet success
+
+```bash
+$ cncli ping --host preprod-node.play.dev.cardano.org --port 3001 --network-magic 1
+```
+
+##### Ping Testnet Success Result
+
+```bash
+{
+  "status": "ok",
+  "host": "preprod-node.play.dev.cardano.org",
+  "port": 3001,
+  "networkProtocolVersion": 11,
+  "dnsDurationMs": 2,
+  "connectDurationMs": 47,
+  "handshakeDurationMs": 57,
+  "durationMs": 107
+}
+```
+
+### Sync Command
+
+This command connects to a remote node and synchronizes blocks to a local sqlite database. The ```validate``` and ```leaderlog``` commands require a synchronized database.
+
+**Note**: to setup ```cncli sync``` as a ```systemd``` service, please refer to the [installation guide](INSTALL.md). When enabled as ```systemd``` service, ```sync``` will continuously keep the ```cncli.db``` database synchronized.
+
+#### Show Sync Help
+
+```bash
+$ cncli sync --help
+cncli-sync 6.0.0
+
+USAGE:
+    cncli sync [FLAGS] [OPTIONS] --host <host>
+
+FLAGS:
+        --help          Prints help information
+        --no-service    Exit at 100% sync'd.
+    -V, --version       Prints version information
+
+OPTIONS:
+    -d, --db <db>                                        sqlite database file [default: ./cncli.db]
+    -h, --host <host>                                    cardano-node hostname to connect to
+        --network-magic <network-magic>                  network magic. [default: 764824073]
+    -p, --port <port>                                    cardano-node port [default: 3001]
+    -s, --shelley-genesis-hash <shelley-genesis-hash>
+            shelley genesis hash value [default: 1a3be38bcbb7911969283716ad7aa550250226b76a61fc51cc9a9a35d9276d81]
+```
+
+#### Example sync command
+
+```bash
+$ cncli sync --host backbone.cardano-mainnet.iohk.io
+```
+
+##### Sync Result
+
+```bash
+ 2024-01-04T17:21:11.298Z INFO  cncli::nodeclient::sync > get_intersect_blocks took: 308.175µs
+ 2024-01-04T17:21:15.805Z INFO  cncli::nodeclient::sync > block 9762075 of 9762081:  99.99% sync'd
+ 2024-01-04T17:21:16.811Z INFO  cncli::nodeclient::sync > block 9762081 of 9762081: 100.00% sync'd
+ 2024-01-04T17:22:24.287Z INFO  cncli::nodeclient::sync > block 9762082 of 9762082: 100.00% sync'd
+ 2024-01-04T17:22:38.313Z INFO  cncli::nodeclient::sync > block 9762083 of 9762083: 100.00% sync'd
+```
+
+### Status Command
+
+This simple command gives you an ok if the database is fully synced. It will return a status of error if not.
+
+#### Show Status Help
+
+```bash
+$ cncli status --help
+cncli-status 6.0.0
+
+USAGE:
+    cncli status [OPTIONS] --byron-genesis <byron-genesis> --shelley-genesis <shelley-genesis>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --byron-genesis <byron-genesis>                          byron genesis json file
+    -d, --db <db>                                                sqlite database file [default: ./cncli.db]
+        --shelley-genesis <shelley-genesis>                      shelley genesis json file
+        --shelley-transition-epoch <shelley-transition-epoch>
+            Epoch number where we transition from Byron to Shelley. -1 means guess based on genesis files [env:
+            SHELLEY_TRANS_EPOCH=]  [default: -1]
+```
+
+#### Status when fully synced
+
+```bash
+$ cncli status --byron-genesis ~/haskell/local/byron-genesis.json --shelley-genesis ~/haskell/local/shelley-genesis.json
+```
+
+##### Fully Synced Result
+
+```bash
+{
+ "status": "ok"
+}
+```
+
+#### Status when not fully synced
+
+```bash
+$ cncli status --byron-genesis ~/haskell/local/byron-genesis.json --shelley-genesis ~/haskell/local/shelley-genesis.json --db dummy.db
+```
+
+##### Not In Sync Result
+
+```bash
+{
+ "status": "error",
+ "errorMessage": "db not fully synced!"
+}
+```
+
+### Validate Command
+
+This command validates that a block hash or partial block hash is on-chain. You must run ```sync``` command separately to build up the database and have it sync to 100%.
+
+#### Show Validate Help
+
+```bash
+$ cncli validate --help
+cncli-validate 6.0.0
+
+USAGE:
+    cncli validate [OPTIONS] --hash <hash>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+    -d, --db <db>        sqlite database file [default: ./cncli.db]
+        --hash <hash>    full or partial block hash to validate
+```
+
+#### Validate block success
+
+```bash
+$ cncli validate --hash 0c4b73
+```
+
+##### Validate Success Result
+
+```bash
+{
+ "status": "ok",
+ "block_number": "4891104",
+ "slot_number": "12597768",
+ "pool_id": "89af15a1c2b8e379aa8ca6d4d9b0134e373122f84f6f45fac2e26c47",
+ "hash": "0c4b730183ab2533d423f9af56ed99efd8121f716f82aa95caa3e6c11f10dc8d",
+ "prev_hash": "2142685e0912f1956c99551431270c1e199b85cde57fe56554d23ce111504fe9",
+ "leader_vrf": "000111925d12aea26b1705ef244fe8930f437be294180b418fba47ebf386e73d5ec7bbd397df5ba44d085171a66266089fba10a089442e207d7ad730849f9293"
+}
+```
+
+#### Validate block orphaned
+
+```bash
+$ cncli validate --hash ab7095
+```
+
+##### Validate Orphaned Result
+
+```bash
+{
+ "status": "orphaned",
+ "block_number": "9762067",
+ "slot_number": "112822212",
+ "pool_id": "ec736597797c68044b8fccd4e895929c0a842f2e9e0a9e221b0a3026",
+ "hash": "ab70958f10aac7399453a257b00377dd64615d36544d9a4c44abacc1ac66bf4f",
+ "prev_hash": "b84c068276492628bb373f0d1a67a55675f80e692a3767fbffaccc2fd08757e4",
+ "leader_vrf": "000130f59c1a9ed0129abea4ba2c1a8a175f0259ce94ef77efa2fc2724638202"
+}
+```
+
+#### Validate block missing
+
+```bash
+$ cncli validate --hash ba53ba11
+```
+
+##### Validate Missing Result
+
+```bash
+{
+ "status": "error",
+ "errorMessage": "Query returned no rows"
+}
+```
+
+### Nonce Command
+
+This command calculates the epoch nonce value. This command requires that you use the ```sync``` command above to build a 100% synchronized ```cncli.db``` database file.
+
+#### Show Nonce Help
+
+```bash
+$ cncli nonce --help
+cncli-nonce 6.2.0
+
+USAGE:
+    cncli nonce [OPTIONS] --byron-genesis <byron-genesis> --shelley-genesis <shelley-genesis>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --byron-genesis <byron-genesis>                          byron genesis json file
+    -c, --consensus <consensus>
+            Consensus algorithm - Alonzo and earlier uses tpraos, Babbage uses praos, Conway uses cpraos [default:
+            praos]
+    -d, --db <db>                                                sqlite database file [default: ./cncli.db]
+        --epoch <epoch>
+            Provide a specific epoch number to calculate for and ignore --ledger-set option
+
+        --extra-entropy <extra-entropy>                          hex string of the extra entropy value
+        --ledger-set <ledger-set>
+            Which ledger data to use. prev - previous epoch, current - current epoch, next - future epoch [default:
+            current]
+        --shelley-genesis <shelley-genesis>                      shelley genesis json file
+        --shelley-transition-epoch <shelley-transition-epoch>
+            Epoch number where we transition from Byron to Shelley. -1 means guess based on genesis files [env:
+            SHELLEY_TRANS_EPOCH=]  [default: -1]
+```
+
+#### Calculate nonce
+
+```bash
+$ cncli nonce --byron-genesis ~/haskell/local/byron-genesis.json --shelley-genesis ~/haskell/local/shelley-genesis.json --ledger-set next
+```
+
+##### Nonce Result
+
+```bash
+4c80bbb4bbec29a7e828dd0727e6a76878ab031b5abb4aa02c78287b1523f4e5
+```
+
+### Leaderlog Command
+
+This command calculates a stake pool's expected slot list. ```prev``` and ```current``` logs are available as long as you have a synchronized database. ```next``` logs are only available 1.5 days before the end of the epoch. You need to use ```.poolStakeMark``` and ```.activeStakeMark``` for ```next```, ```.poolStakeSet``` and ```.activeStakeSet``` for ```current```, ```.poolStakeGo``` and ```.activeStakeGo``` for ```prev```.
+
+For executable stake-snapshot examples, use the tracked [next](scripts/cncli-leaderlog-next.sh), [current](scripts/cncli-leaderlog-current.sh), and [previous](scripts/cncli-leaderlog-prev.sh) wrappers. Set the operator pool ID, key/genesis/socket paths and binary/path overrides documented in [INSTALL.md](INSTALL.md#helper-scripts). They check snapshot/sync/leaderlog exit status and JSON before printing a schedule; do not continue calculations after a failed command.
+
+**Note**: to automate calculating your assigned slots and sending them to [PoolTool](https://pooltool.io/), please refer to the [installation guide](INSTALL.md).
+
+#### Show Leaderlog Help
+
+```bash
+$ cncli leaderlog --help
+cncli-leaderlog 6.2.0
+
+USAGE:
+    cncli leaderlog [OPTIONS] --active-stake <active-stake> --byron-genesis <byron-genesis> --pool-id <pool-id> --pool-stake <pool-stake> --pool-vrf-skey <pool-vrf-skey> --shelley-genesis <shelley-genesis>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --active-stake <active-stake>                            total active stake snapshot value in lovelace
+        --byron-genesis <byron-genesis>                          byron genesis json file
+    -c, --consensus <consensus>
+            Consensus algorithm - Alonzo and earlier uses tpraos, Babbage uses praos, Conway uses cpraos [default:
+            praos]
+        --d <d>                                                  decentralization parameter [default: 0]
+    -d, --db <db>                                                sqlite database file [default: ./cncli.db]
+        --epoch <epoch>
+            Provide a specific epoch number to calculate for and ignore --ledger-set option
+
+        --extra-entropy <extra-entropy>                          hex string of the extra entropy value
+        --ledger-set <ledger-set>
+            Which ledger data to use. prev - previous epoch, current - current epoch, next - future epoch [default:
+            current]
+        --nonce <nonce>
+            Provide a nonce value in lower-case hex instead of calculating from the db
+
+        --pool-id <pool-id>                                      lower-case hex pool id
+        --pool-stake <pool-stake>                                pool active stake snapshot value in lovelace
+        --pool-vrf-skey <pool-vrf-skey>                          pool's vrf.skey file
+        --shelley-genesis <shelley-genesis>                      shelley genesis json file
+        --shelley-transition-epoch <shelley-transition-epoch>
+            Epoch number where we transition from Byron to Shelley. -1 means guess based on genesis files [env:
+            SHELLEY_TRANS_EPOCH=]  [default: -1]
+        --tz <timezone>
+            TimeZone string from the IANA database - https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+            [default: America/Los_Angeles]
+```
+
+#### Calculate leaderlog
+
+```bash
+$ cncli leaderlog --pool-id 00beef0a9be2f6d897ed24a613cf547bb20cd282a04edfc53d477114 --pool-vrf-skey ./bcsh.vrf.skey --byron-genesis /home/westbam/haskell/local/byron-genesis.json --shelley-genesis /home/westbam/haskell/local/shelley-genesis.json --pool-stake $POOL_STAKE --active-stake $ACTIVE_STAKE --consensus tpraos --ledger-set current
+```
+
+##### Leaderlog Success Result
+
+```bash
+{
+  "status": "ok",
+  "epoch": 227,
+  "epochNonce": "0e534dd41bb80bfff4a16d038eb52280e9beac7545cc32c9bfc253a6d92010d1",
+  "poolId": "00beef284975ef87856c1343f6bf50172253177fdebc756524d43fc1",
+  "sigma": 0.0028306163817569175,
+  "d": 0,
+  "assignedSlots": [
+    ...
+    {
+      "slot": 13083245,
+      "slotInEpoch": 382445,
+      "at": "2020-11-05T23:58:56-08:00"
+    },
+    {
+      "slot": 13106185,
+      "slotInEpoch": 405385,
+      "at": "2020-11-06T06:21:16-08:00"
+    }
+    ...
+  ]
+}
+```
+
+#### Calculate leaderlog failure (too soon for "next" logs, or un-synchronized database)
+
+```bash
+$ cncli leaderlog --pool-id 00beef0a9be2f6d897ed24a613cf547bb20cd282a04edfc53d477114 --pool-vrf-skey ./bcsh.vrf.skey --byron-genesis /home/westbam/haskell/local/byron-genesis.json --shelley-genesis /home/westbam/haskell/local/shelley-genesis.json --pool-stake $POOL_STAKE --active-stake $ACTIVE_STAKE --ledger-set next
+```
+
+##### Leaderlog Too Soon Result
+
+```bash
+{
+ "status": "error",
+ "errorMessage": "Query returned no rows"
+}
+```
+
+### Sendtip command
+
+The sendtip command is used to communicate with [pooltool.io](https://pooltool.io) so you can have a green badge on their website with your current tip height.
+
+![pooltool tip image](images/pooltool_sendtip.png)
+
+It is important to point this command at your core nodes. This will help pooltool capture any orphan blocks. There is no guarantee that an orphan block you make will be seen by pooltool. Pointing to your core nodes should help with that.
+
+**Note**: to setup ```cncli sendtip``` as a ```systemd``` service, please refer to the [installation guide](INSTALL.md). When enabled as ```systemd``` service, ```sendtip``` will continuously send your stake pool ```tip``` to PoolTool.
+
+
+#### Sendtip help
+
+```bash
+$ cncli sendtip --help
+cncli-sendtip 6.0.0
+
+USAGE:
+    cncli sendtip [OPTIONS] --cardano-node <cardano-node>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --cardano-node <cardano-node>    path to cardano-node executable for gathering version info
+        --config <config>                pooltool config file for sending tips [default: ./pooltool.json]
+```
+
+#### Configuring pooltool.json
+
+You need to create a pooltool.json file so that the sendtip command knows what node(s) to connect to. It also contains your pooltool configuration. Your pooltool api key can be found on your pooltool profile page.
+
+```json
+{
+  "api_key": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+  "pools": [
+    ...
+      {
+          "name": "TCKR",
+          "pool_id": "a7398d649be2f6d897ed24a613cf547bb20cd282a04edfc53d477114",
+          "host" : "123.123.123.12",
+          "port": 3001
+      },
+      {
+          "name": "TCKR1",
+          "pool_id": "b73d891285526062d41cd7293746048c6a9a13ab8b591920cf40c706",
+          "host" : "123.123.123.35",
+          "port": 3001
+      },
+    ...
+  ]
+}
+```
+
+#### Sending tips to pooltool
+
+```bash
+$ cncli sendtip --cardano-node /usr/local/bin/cardano-node --config /root/scripts/pooltool.json
+```
+
+##### Sending Tip Result
+
+```bash
+2020-11-08T18:37:52.323Z INFO  cncli::nodeclient::protocols::mux_protocol > Connecting to 123.123.123.12:3001
+2020-11-08T18:37:52.358Z WARN  cncli::nodeclient::protocols::transaction_protocol > TxSubmissionProtocol::State::Done
+2020-11-08T18:37:52.358Z WARN  cncli::nodeclient::protocols::chainsync_protocol   > rollback to slot: 4492799
+2020-11-08T18:37:52.359Z WARN  cncli::nodeclient::protocols::chainsync_protocol   > rollback to slot: 13294373
+2020-11-08T18:37:54.402Z INFO  cncli::nodeclient::protocols::chainsync_protocol   > Pooltool (TCKR, a7398d64): (4925270, 4d65b09dc1d5c6c2), json: {"success":true,"message":null}
+2020-11-08T18:38:36.323Z INFO  cncli::nodeclient::protocols::chainsync_protocol   > Pooltool (TCKR, a7398d64): (4925271, 47d6beb189f24c9e), json: {"success":true,"message":null}
+2020-11-08T18:38:37.424Z INFO  cncli::nodeclient::protocols::chainsync_protocol   > Pooltool (TCKR, a7398d64): (4925272, defe4ba88985c305), json: {"success":true,"message":null}
+ ...
+ ...
+```
+
+### Sendslots command
+
+The sendslots command securely sends pooltool the number of slots you have assigned for an epoch and validates the correctness of your past epochs. You must have a synchronized ```cncli.db``` database and have calculated leader logs for every pool in ```pooltool.json``` before calling this command. It should be called within the first 10 minutes of the epoch cutover.
+
+**Note**: to automate sending your pool assigned slots to [PoolTool](https://pooltool.io/), please refer to the [installation guide](INSTALL.md).
+
+#### Sendslots help
+
+```bash
+$ cncli sendslots --help
+cncli-sendslots 6.0.0
+
+USAGE:
+    cncli sendslots [OPTIONS] --byron-genesis <byron-genesis> --shelley-genesis <shelley-genesis>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --byron-genesis <byron-genesis>        byron genesis json file
+        --config <config>                      pooltool config file for sending slots [default: ./pooltool.json]
+    -d, --db <db>                              sqlite database file [default: ./cncli.db]
+        --shelley-genesis <shelley-genesis>    shelley genesis json file
+```
+
+#### Sendslots Success
+
+```bash
+$ cncli sendslots --byron-genesis ~/haskell/local/byron-genesis.json --shelley-genesis ~/haskell/local/shelley-genesis.json
+```
+
+##### Sendslots success result
+
+Exit status is 0 with no stdout success envelope. Non-secret tracing events on stderr contain operation, full pool ID, epoch, HTTP status, duration and outcome. Requests, API keys and remote response bodies are never logged. Missing slots, configuration errors and HTTP rejection fail with exit 1; sending stops at the first failed pool, without retries or undoing already accepted sends.
+
+### Sign Command
+
+This command signs a CIP-0022 challenge built from a domain and nonce with the pool's vrf.skey.
+
+#### Show Sign Help
+
+```bash
+$ cncli sign --help
+cncli-sign 6.0.0
+
+USAGE:
+    cncli sign --domain <domain> --nonce <nonce> --pool-vrf-skey <pool-vrf-skey>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --domain <domain>                    validating domain e.g. pooltool.io
+        --nonce <nonce>                      nonce value in lower-case hex
+        --pool-vrf-skey <pool-vrf-skey>      pool's vrf.skey file
+```
+
+#### Sign a challenge
+
+```bash
+$ cncli sign --domain pooltool.io --nonce "$NONCE" --pool-vrf-skey pool.vrf.skey
+```
+
+##### Sign Result
+
+```bash
+{
+  "status": "ok",
+  "signature": "8aff63e961aad02852dbb7905f9215d7b1d4ff63f734f7f1b82184004112cca798719941ccf54beca360f844632c2c070e6f8ef11ca177efa240c712ef3d7e9f283db68278088acbe1af381cc9673e08"
+}
+```
+
+### Verify Command
+
+This command verifies a CIP-0022 proof for a domain and nonce against the pool's vrf.vkey and on-chain verification-key hash.
+
+#### Show Verify Help
+
+```bash
+$ cncli verify --help
+cncli-verify 6.0.0
+
+USAGE:
+    cncli verify --domain <domain> --nonce <nonce> --pool-vrf-vkey <pool-vrf-vkey> --pool-vrf-vkey-hash <pool-vrf-vkey-hash> --signature <signature>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --domain <domain>                              validating domain e.g. pooltool.io
+        --nonce <nonce>                                nonce value in lower-case hex
+        --pool-vrf-vkey <pool-vrf-vkey>                pool's vrf.vkey file
+        --pool-vrf-vkey-hash <pool-vrf-vkey-hash>
+            pool's vrf hash in hex retrieved from 'cardano-cli query pool-params...'
+
+        --signature <signature>                        signature to verify in hex
+```
+
+#### Verify a challenge
+
+```bash
+$ cncli verify --domain pooltool.io --nonce "$NONCE" --pool-vrf-vkey pool.vrf.vkey --pool-vrf-vkey-hash f58bf0111f8e9b233c2dcbb72b5ad400330cf260c6fb556eb30cefd387e5364c --signature 8aff63e961aad02852dbb7905f9215d7b1d4ff63f734f7f1b82184004112cca798719941ccf54beca360f844632c2c070e6f8ef11ca177efa240c712ef3d7e9f283db68278088acbe1af381cc9673e08
+```
+
+##### Verify Result
+
+```bash
+{
+  "status": "ok"
+}
+```
+
+### Snapshot Command
+
+This command retrieves the stake snapshot for the current epoch. The snapshot is saved to a CSV file. Each epoch has three snapshots: mark, set, and go. The mark snapshot is taken at the beginning of the epoch, the set snapshot is one epoch ago, and the go snapshot is two epochs ago.
+
+#### Retrieve an Epoch Snapshot
+
+```bash
+$ cncli snapshot --help
+cncli-snapshot 6.3.0
+
+USAGE:
+    cncli snapshot [OPTIONS] --socket-path <socket-path>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --name <name>                      Snapshot name to retrieve (mark, set, go) [default: mark]
+        --network-id <network-id>          The network identifier, (1 for mainnet, 0 for testnet) [default: 1]
+        --network-magic <network-magic>    network magic. [default: 764824073]
+        --output-file <output-file>        The name of the output file (CSV format) [default: mark.csv]
+        --socket-path <socket-path>        cardano-node socket path
+        --stake-prefix <stake-prefix>      The prefix for stake addresses, (stake for mainnet, stake_test for testnet)
+                                           [default: stake]
+```
+
+### Pool-Stake Command
+
+This command retrieves the pool stake distribution snapshot for the current epoch. The snapshot is saved to a CSV file. Each epoch has three snapshots: mark, set, and go. The mark snapshot is taken at the beginning of the epoch, the set snapshot is one epoch ago, and the go snapshot is two epochs ago.
+
+#### Retrieve the Pool Stake Distribution Snapshot
+```bash
+$ cncli pool-stake --help       
+cncli-pool-stake 6.5.0
+
+USAGE:
+    cncli pool-stake [OPTIONS] --socket-path <socket-path>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+        --name <name>                      PoolStake snapshot name to retrieve (mark, set, go) [default: mark]
+        --network-id <network-id>          The network identifier, (1 for mainnet, 0 for testnet) [default: 1]
+        --network-magic <network-magic>    network magic. [default: 764824073]
+        --output-file <output-file>        The name of the output file (CSV format) [default: mark.csv]
+        --socket-path <socket-path>        cardano-node socket path
+```
+
+### Dump Block Command
+
+This command dump the raw cbor hex of a block given the previous block's hash and slot number.
+
+#### Retrieve the raw cbor hex of a block
+
+```bash
+$ cncli dump-block --help
+cncli-dump-block 6.7.0
+
+USAGE:
+    cncli dump-block [OPTIONS] --host <host> --intersect-hash <intersect-hash> --intersect-slot <intersect-slot>
+
+FLAGS:
+        --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+    -h, --host <host>                        cardano-node hostname to connect to
+        --intersect-hash <intersect-hash>    Block hash of the intersect point (hex)
+        --intersect-slot <intersect-slot>    Slot number of the intersect point
+        --network-magic <network-magic>      network magic. [default: 764824073]
+    -p, --port <port>
+```

@@ -1,0 +1,16 @@
+/target
+.idea
+*.db*
+*.redb*
+*.skey
+*.vkey
+pooltool.json
+testnet
+launchpad
+guild
+currentslots.sh
+sendslots.sh
+nextslots.sh
+prevslots.sh
+pingall.sh
+.DS_Store
