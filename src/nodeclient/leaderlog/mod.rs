@@ -906,6 +906,8 @@ fn post_slots(client: &reqwest::blocking::Client, base_url: &str, request: &Pool
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use crate::nodeclient::leaderlog::{is_overlay_slot, vrf_eval_certified};
 
     #[test]
@@ -1143,5 +1145,4 @@ mod tests {
         current_slot = 15920150_u64;
         assert!(is_overlay_slot(&first_slot_of_epoch, &current_slot, &d));
     }
-
 }
