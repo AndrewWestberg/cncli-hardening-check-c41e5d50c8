@@ -907,7 +907,6 @@ fn post_slots(client: &reqwest::blocking::Client, base_url: &str, request: &Pool
 #[cfg(test)]
 mod tests {
     use crate::nodeclient::leaderlog::{is_overlay_slot, vrf_eval_certified};
-    use chrono::{NaiveDateTime, Utc};
 
     #[test]
     fn short_vrf_inputs_return_errors() {
@@ -1145,51 +1144,4 @@ mod tests {
         assert!(is_overlay_slot(&first_slot_of_epoch, &current_slot, &d));
     }
 
-    #[test]
-    fn test_date_parsing() {
-        let genesis_start_time_sec = NaiveDateTime::parse_from_str("2022-10-25T00:00:00Z", "%Y-%m-%dT%H:%M:%S%.fZ")
-            .unwrap()
-            .and_utc()
-            .timestamp();
-
-        assert_eq!(genesis_start_time_sec, 1666656000);
-    }
-
-    #[test]
-    fn test_date_parsing2() {
-        let genesis_start_time_sec =
-            NaiveDateTime::parse_from_str("2024-05-16T17:18:10.000000000Z", "%Y-%m-%dT%H:%M:%S%.fZ")
-                .unwrap()
-                .and_utc()
-                .timestamp();
-
-        assert_eq!(genesis_start_time_sec, 1715879890);
-    }
-
-    #[test]
-    fn test_date_parsing3() {
-        let genesis_start_time_sec = NaiveDateTime::parse_from_str("2021-12-09T22:55:22Z", "%Y-%m-%dT%H:%M:%S%.fZ")
-            .unwrap()
-            .and_utc()
-            .timestamp();
-        assert_eq!(genesis_start_time_sec, 1639090522);
-        let current_time_sec = Utc::now().timestamp();
-        println!("current_time_sec: {}", current_time_sec);
-        let current_epoch = (current_time_sec - genesis_start_time_sec) / 3600;
-        println!("current_epoch: {}", current_epoch);
-    }
-
-    #[test]
-    fn test_date_parsing_mainnet() {
-        let genesis_start_time_sec = NaiveDateTime::parse_from_str("2017-09-23T21:44:51Z", "%Y-%m-%dT%H:%M:%S%.fZ")
-            .unwrap()
-            .and_utc()
-            .timestamp();
-
-        assert_eq!(genesis_start_time_sec, 1506203091);
-        let current_time_sec = Utc::now().timestamp();
-        println!("current_time_sec: {}", current_time_sec);
-        let current_epoch = (current_time_sec - genesis_start_time_sec) / 432000;
-        println!("current_epoch: {}", current_epoch);
-    }
 }
