@@ -1,7 +1,8 @@
 name: Validate
 
 on:
-  push: {}
+  push:
+    branches-ignore: ['ops-systemd-proof-*']
 
 permissions:
   contents: read

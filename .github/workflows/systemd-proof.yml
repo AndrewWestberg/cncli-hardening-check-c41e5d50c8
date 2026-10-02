@@ -1,0 +1,28 @@
+name: Disposable systemd runtime proof
+on:
+  push:
+    branches: ['ops-systemd-proof-*']
+permissions:
+  contents: read
+  attestations: read
+jobs:
+  runtime:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify released artifact and exercise documented units
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          work=$(mktemp -d)
+          trap 'sudo systemctl stop cncli-leaderlog.timer cncli-leaderlog.service cncli-sync.service cncli-sendtip.service || true; sudo rm -rf /etc/cncli /var/lib/cncli /var/lib/cncli-leaderlog /var/log/cncli-leaderlog /run/cardano-node; rm -rf "$work"' EXIT
+          gh release download v6.8.0-rc-hardening-e4a2b306 --repo "$GITHUB_REPOSITORY" --pattern 'cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz*' --dir "$work"
+          (cd "$work"; sha256sum -c cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz.sha256)
+          gh attestation verify "$work/cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz" --repo "$GITHUB_REPOSITORY"
+          tar -xzf "$work/cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz" -C "$work"
+          sudo install -o root -g root -m 0755 "$work/cncli" /usr/local/bin/cncli
+          /usr/local/bin/cncli --version
+          /usr/local/bin/cncli --help
+          sudo python3 scripts/disposable-systemd-proof.py
