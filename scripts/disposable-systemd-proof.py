@@ -100,6 +100,12 @@ try:
         assert run('systemctl','show','cncli-'+name+'.service','--property=MainPID','--value').stdout.strip()==pid
         assert run('systemctl','is-active','cncli-'+name+'.service').stdout.strip()=='active'
     assert P('/var/lib/cncli/cncli.db').exists()
+    run('systemctl','stop','cncli-sync.service')
+    run('stat','-c','%a %U:%G %n','/var/lib/cncli/cncli.db')
+    # Apply INSTALL's explicit stopped-writer DB permission provisioning.
+    run('bash','-ec',re.search(r'```bash\n(# Only after stopping every database writer;.*?)```',doc,re.S).group(1))
+    run('stat','-c','%a %U:%G %n','/var/lib/cncli/cncli.db')
+    run('systemctl','start','cncli-sync.service')
     run('systemctl','start','cncli-leaderlog.service')
     assert P('/var/lib/cncli-leaderlog/slots.csv').read_text().strip()=='fixture,42,1'
     print('ONESHOT SYNTHETIC EXTERNAL HELPER SUCCESS; not candidate leaderlog consensus evidence',flush=True)
