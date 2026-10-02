@@ -87,7 +87,8 @@ jobs:
           TARGET: ${{ matrix.job.target }}
           LABEL: ${{ matrix.job.label }}
         run: |
-          read -r PROJECT_NAME PROJECT_VERSION < <(python -c 'import json,subprocess; m=json.loads(subprocess.check_output(["cargo","metadata","--locked","--no-deps","--format-version","1"])); p=next(p for p in m["packages"] if p["name"]=="cncli"); print(p["name"],p["version"])')
+          if [[ "$TARGET" == *-pc-windows-* ]]; then PYTHON=python; else PYTHON=python3; fi
+          IFS=$' \t\r' read -r PROJECT_NAME PROJECT_VERSION < <("$PYTHON" -c 'import json,subprocess; m=json.loads(subprocess.check_output(["cargo","metadata","--locked","--no-deps","--format-version","1"])); p=next(p for p in m["packages"] if p["name"]=="cncli"); print(p["name"],p["version"])')
           if [[ "$TARGET" == *-pc-windows-* ]]; then PKG_SUFFIX=".zip"; else PKG_SUFFIX=".tar.gz"; fi
           PKG_NAME="${PROJECT_NAME}-${PROJECT_VERSION}-${LABEL}-${TARGET}${PKG_SUFFIX}"
           if [[ "$TARGET" == *-pc-windows-* ]]; then
@@ -96,7 +97,7 @@ jobs:
             tar -C "target/$TARGET/release" -czf "$PKG_NAME" cncli
           fi
           export PKG_NAME
-          python - <<'PY'
+          "$PYTHON" - <<'PY'
           import hashlib, os, pathlib
           archive = pathlib.Path(os.environ["PKG_NAME"])
           digest = hashlib.sha256()
@@ -144,7 +145,7 @@ jobs:
         id: verified
         shell: bash
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess
           metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"]))
           package = next(p for p in metadata["packages"] if p["name"] == "cncli")
@@ -176,7 +177,7 @@ jobs:
 
       - name: Attest verified archives
         id: provenance
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v4
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: ${{ steps.verified.outputs.archives }}
 
