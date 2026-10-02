@@ -116,6 +116,7 @@ try:
     run('journalctl','-u','cncli-sync','-u','cncli-sendtip','-u','cncli-leaderlog','--no-pager','-n','160')
     print('PASS actual systemd mount sandbox probes, candidate executable lifecycle and TCP retry, oneshot synthetic CSV, timer properties',flush=True)
 finally:
+    run('journalctl','-u','cncli-sync','-u','cncli-sendtip','-u','cncli-leaderlog','--no-pager','-n','160',check=False)
     run('systemctl','stop','cncli-leaderlog.timer','cncli-leaderlog.service','cncli-sync.service','cncli-sendtip.service',check=False)
     stopping.set(); listener.close(); unix.close()
     for conn in connections: conn.close()
