@@ -17,12 +17,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           work=$(mktemp -d)
-          trap 'sudo systemctl stop cncli-leaderlog.timer cncli-leaderlog.service cncli-sync.service cncli-sendtip.service || true; sudo rm -rf /etc/cncli /var/lib/cncli /var/lib/cncli-leaderlog /var/log/cncli-leaderlog /run/cardano-node; rm -rf "$work"' EXIT
+          trap 'sudo systemctl stop cncli-leaderlog.timer cncli-leaderlog.service cncli-sync.service cncli-sendtip.service || true; sudo rm -rf /etc/cncli /var/lib/cncli /var/lib/cncli-leaderlog /var/log/cncli-leaderlog /run/cardano-node /etc/systemd/system/cncli-{sync,sendtip,leaderlog}.service /etc/systemd/system/cncli-leaderlog.timer /etc/systemd/system/cncli-{sync,sendtip,leaderlog}.service.d; sudo rm -f /usr/local/bin/cncli /usr/local/bin/cardano-node /usr/local/bin/cardano-cli /usr/local/bin/cncli-fixture /usr/local/bin/cncli-sandbox-probe /usr/local/bin/cncli-leaderlog.sh /usr/local/bin/cncli-sendslots.sh; rm -rf "$work"' EXIT
           gh release download v6.8.0-rc-hardening-e4a2b306 --repo "$GITHUB_REPOSITORY" --pattern 'cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz*' --dir "$work"
           (cd "$work"; sha256sum -c cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz.sha256)
-          gh attestation verify "$work/cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "$work/cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz" --repo "$GITHUB_REPOSITORY" --format json
           tar -xzf "$work/cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz" -C "$work"
           sudo install -o root -g root -m 0755 "$work/cncli" /usr/local/bin/cncli
           /usr/local/bin/cncli --version
           /usr/local/bin/cncli --help
-          sudo python3 scripts/disposable-systemd-proof.py
+          sudo --preserve-env=GITHUB_ACTIONS python3 scripts/disposable-systemd-proof.py
