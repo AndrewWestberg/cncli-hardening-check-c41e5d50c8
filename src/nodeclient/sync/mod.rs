@@ -400,8 +400,8 @@ async fn do_chainsync(client: &mut chainsync::N2NClient, observer: &mut ChainObs
     }
 }
 
-// Pallas 1.3.0's async abort has no suspension point: one poll aborts both
-// plexer tasks even when the owning command future is cancelled.
+// ponytail: locked Pallas 1.3.0 abort never suspends; replace this guard if abort gains an await.
+// One poll aborts both plexer tasks when the owning command future is cancelled.
 struct SessionCleanup {
     plexer: Option<pallas_network::multiplexer::RunningPlexer>,
     keepalive: Option<tokio::task::AbortHandle>,
