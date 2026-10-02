@@ -1,0 +1,138 @@
+name: Disposable release fault injection
+'on':
+  push:
+    tags:
+    - v*-fault-*
+permissions:
+  contents: read
+  actions: read
+jobs:
+  build:
+    name: Retrieve verified target fixture
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+        - os: ubuntu-22.04
+          label: ubuntu22
+          target: x86_64-unknown-linux-gnu
+        - os: ubuntu-22.04
+          label: ubuntu22
+          target: x86_64-unknown-linux-musl
+          use-cross: true
+        - os: macos-latest
+          label: macos
+          target: aarch64-apple-darwin
+        - os: windows-latest
+          label: windows
+          target: x86_64-pc-windows-msvc
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Download immutable successful-run fixture
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        github-token: ${{ github.token }}
+        run-id: 37056065218
+        name: cncli-6.8.0-${{ matrix.job.label }}-${{ matrix.job.target }}${{ matrix.job.target
+          == 'x86_64-pc-windows-msvc' && '.zip' || '.tar.gz' }}
+        path: fixture
+    - name: Upload target fixture
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: cncli-6.8.0-${{ matrix.job.label }}-${{ matrix.job.target }}${{ matrix.job.target
+          == 'x86_64-pc-windows-msvc' && '.zip' || '.tar.gz' }}
+        path: fixture/*
+        if-no-files-found: error
+  release:
+    name: Exercise release failure boundary
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+    - name: Checkout sources
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - name: Install pinned nightly toolchain
+      uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+      with:
+        toolchain: nightly-2026-09-25
+    - name: Download all target artifacts
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        path: dist
+        merge-multiple: true
+    - name: Inject disposable artifact fault
+      shell: bash
+      run: |
+        case "$GITHUB_REF_NAME" in
+          *-tamper) printf 'injected tampering' >> dist/cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz ;;
+          *-missingarchive) rm dist/cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz ;;
+          *-missingchecksum) rm dist/cncli-6.8.0-ubuntu22-x86_64-unknown-linux-gnu.tar.gz.sha256 ;;
+        esac
+    - name: Verify complete artifact set and checksums
+      id: verified
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import hashlib, json, os, pathlib, subprocess
+        metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"]))
+        package = next(p for p in metadata["packages"] if p["name"] == "cncli")
+        targets = [
+            ("ubuntu22", "x86_64-unknown-linux-gnu", ".tar.gz"),
+            ("ubuntu22", "x86_64-unknown-linux-musl", ".tar.gz"),
+            ("macos", "aarch64-apple-darwin", ".tar.gz"),
+            ("windows", "x86_64-pc-windows-msvc", ".zip"),
+        ]
+        names = [f'{package["name"]}-{package["version"]}-{label}-{target}{suffix}' for label, target, suffix in targets]
+        directory = pathlib.Path("dist")
+        expected = set(names + [name + ".sha256" for name in names])
+        actual = {path.name for path in directory.iterdir()}
+        if actual != expected or any(not path.is_file() or path.is_symlink() for path in directory.iterdir()):
+            raise SystemExit(f"Unexpected artifact set: missing={sorted(expected - actual)}, extra={sorted(actual - expected)}")
+        for name in names:
+            digest = hashlib.sha256()
+            with (directory / name).open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            expected_sidecar = f"{digest.hexdigest()}  {name}\n"
+            if (directory / (name + ".sha256")).read_text() != expected_sidecar:
+                raise SystemExit(f"Checksum mismatch: {name}")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write("archives<<CNCLI_VERIFIED_ARCHIVES\n")
+            output.write("\n".join(str(directory / name) for name in names))
+            output.write("\nCNCLI_VERIFIED_ARCHIVES\n")
+        PY
+    - name: Attest verified archives
+      id: provenance
+      uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+      with:
+        subject-path: ${{ contains(github.ref, 'attestationfail') && 'dist/injected-missing-attestation-subject'
+          || steps.verified.outputs.archives }}
+    - name: Retain actual provenance bundle
+      env:
+        BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+      run: |
+        test -n "$BUNDLE_PATH" && test -s "$BUNDLE_PATH"
+        cp -- "$BUNDLE_PATH" dist/cncli-provenance.jsonl
+    - name: Upload verified release set
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: cncli-verified-release
+        if-no-files-found: error
+        path: |
+          ${{ steps.verified.outputs.archives }}
+          dist/*.sha256
+          dist/cncli-provenance.jsonl
+    - name: Release verified set
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+      with:
+        fail_on_unmatched_files: true
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta')
+          || contains(github.ref, 'rc') }}
+        files: |
+          ${{ steps.verified.outputs.archives }}
+          dist/*.sha256
+          dist/cncli-provenance.jsonl

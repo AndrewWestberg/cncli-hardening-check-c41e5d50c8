@@ -1,7 +1,8 @@
 name: Validate
 
 on:
-  push: {}
+  push:
+    tags-ignore: ['v*-fault-*']
 
 permissions:
   contents: read
